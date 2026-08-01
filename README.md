@@ -8,6 +8,7 @@ independently of one another.
 
 | Project | What it does |
 |---|---|
+| [GestureControl](GestureControl/) | Control the macOS cursor and windows with hand gestures from the webcam. MediaPipe hand tracking into synthesised mouse and keyboard events. |
 
 ## Layout
 

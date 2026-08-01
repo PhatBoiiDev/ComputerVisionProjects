@@ -1,0 +1,67 @@
+{
+  "camera": {
+    "index": 0,
+    "width": 640,
+    "height": 480,
+    "fps": 30
+  },
+  "region": {
+    "x_margin": 0.22,
+    "y_margin": 0.16
+  },
+  "smoothing": {
+    "min_cutoff": 1.3,
+    "beta": 0.045,
+    "d_cutoff": 1.0
+  },
+  "pinch": {
+    "engage": 0.42,
+    "release": 0.6,
+    "max_index_curl": 110.0
+  },
+  "click": {
+    "max_duration": 0.45,
+    "drag_delay": 0.32,
+    "drag_move_px": 22.0,
+    "double_gap": 0.42,
+    "cooldown": 0.22
+  },
+  "scroll": {
+    "gain": 2.6,
+    "deadzone_px": 2.0,
+    "invert": false,
+    "horizontal": true
+  },
+  "gesture": {
+    "stable_frames": 3,
+    "toggle_pose": "FIST",
+    "arm_toggle_hold": 1.0,
+    "extend_below": 55.0,
+    "curl_above": 100.0,
+    "min_detection_confidence": 0.6,
+    "min_presence_confidence": 0.6,
+    "min_tracking_confidence": 0.6
+  },
+  "hands": {
+    "count": 2,
+    "primary": "Right"
+  },
+  "resize": {
+    "enabled": true,
+    "min_scale": 0.3,
+    "max_scale": 3.5,
+    "min_width": 200,
+    "min_height": 150,
+    "deadzone": 0.02,
+    "update_interval": 0.05
+  },
+  "exit_gesture": {
+    "enabled": true,
+    "arm_hold": 0.35,
+    "cooldown": 1.5,
+    "shortcut": "cmd+w"
+  },
+  "cursor_anchor": "index_mcp",
+  "model_path": "/Users/josh/Claude Code Projects/GestureControl/models/hand_landmarker.task",
+  "start_armed": false
+}
