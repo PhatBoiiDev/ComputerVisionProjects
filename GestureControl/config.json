@@ -62,6 +62,6 @@
     "shortcut": "cmd+w"
   },
   "cursor_anchor": "index_mcp",
-  "model_path": "/Users/josh/Claude Code Projects/GestureControl/models/hand_landmarker.task",
+  "model_path": "",
   "start_armed": false
 }

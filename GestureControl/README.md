@@ -204,9 +204,9 @@ A few decisions worth knowing about:
 ./.venv/bin/python -m pytest tests/ -q
 ```
 
-97 tests covering gesture classification, the click/drag/scroll state machine,
-the exit and resize gestures, hand assignment, coordinate mapping and the
-capture loop. Hand poses are built by forward kinematics from joint angles, so a
+101 tests covering gesture classification, the click/drag/scroll state machine,
+the exit and resize gestures, hand assignment, coordinate mapping, config
+round-tripping and the capture loop. Hand poses are built by forward kinematics from joint angles, so a
 test can describe a pose the way a hand actually moves — including tilted,
 mirrored, rescaled and camera-angled variants — and the suite runs without a
 camera.
@@ -232,6 +232,16 @@ between actions.
 **Windows will not resize.** Not every window supports it; try a normal document
 window. The preview logs `resize: no resizable window` when the focused window
 refuses.
+
+**A window stops resizing partway.** It has hit a limit macOS enforces rather
+than one this tool sets. Windows cannot grow past the visible screen area, and
+most apps refuse to shrink below their own minimum size — measured on this Mac,
+Claude bottoms out at 600x400 regardless of what it is asked for. The window
+server accepts the request and silently clamps it, so there is no error to
+report. Keep moving your hands and the window picks up again as soon as the
+requested size comes back inside the allowed range: each frame is computed from
+the size the window was when the gesture started, not from its current size, so
+clamping never accumulates.
 
 **Cursor cannot reach the screen edges.** Raise the `region` margins.
 

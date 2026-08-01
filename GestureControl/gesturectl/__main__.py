@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-from pathlib import Path
 
 from .config import Config
 
@@ -17,7 +16,7 @@ def _doctor(cfg: Config) -> int:
     ok = True
     print("Gesture Control - environment check\n")
 
-    model = Path(cfg.model_path)
+    model = cfg.model_file
     if model.exists():
         print(f"  [ok]   hand landmark model  ({model.stat().st_size / 1e6:.1f} MB)")
     else:
@@ -93,8 +92,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"wrote {path}")
         return 0
 
-    if not Path(cfg.model_path).exists():
-        print(f"model not found at {cfg.model_path} - run ./setup.sh", file=sys.stderr)
+    if not cfg.model_file.exists():
+        print(f"model not found at {cfg.model_file} - run ./setup.sh", file=sys.stderr)
         return 2
 
     from .app import CameraError, run

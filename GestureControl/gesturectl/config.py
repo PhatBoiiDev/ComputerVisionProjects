@@ -135,8 +135,21 @@ class Config:
     # "index_mcp" is steadier and does not shift when you pinch;
     # "index_tip" feels more like pointing but jitters more.
     cursor_anchor: str = "index_mcp"
-    model_path: str = str(DEFAULT_MODEL)
+
+    # Blank means the copy setup.sh downloads into models/. Set this only to
+    # point somewhere else -- see the model_file property below.
+    model_path: str = ""
     start_armed: bool = False
+
+    @property
+    def model_file(self) -> Path:
+        """Where to load the hand landmark model from.
+
+        Resolved at use time rather than stored. Saving the default as an
+        absolute path bakes one machine's directory layout into config.json,
+        which then breaks the moment the project is moved or cloned elsewhere.
+        """
+        return Path(self.model_path).expanduser() if self.model_path else DEFAULT_MODEL
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> "Config":

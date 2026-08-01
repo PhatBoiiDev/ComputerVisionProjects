@@ -6,6 +6,7 @@ handedness is corrected for the mirrored frame, the overlay renders, and the
 loop always shuts down cleanly.
 """
 
+import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,7 +24,7 @@ from gesturectl.gestures import FingerTracker, Gesture, build_hand      # noqa: 
 from gesturectl.macos_input import parse_shortcut                       # noqa: E402
 from tests import synthetic as syn                                      # noqa: E402
 
-MODEL = Path(Config().model_path)
+MODEL = Config().model_file
 needs_model = pytest.mark.skipif(not MODEL.exists(), reason="model not downloaded")
 
 
@@ -235,3 +236,37 @@ def test_debug_mode_runs(monkeypatch, headless):
     keys = iter([255, 255, ord("q")])
     monkeypatch.setattr(cv2, "waitKey", lambda *_: next(keys, ord("q")))
     assert app.run(Config(), show_preview=True, dry_run=True, debug=True) == 0
+
+
+# -- config portability ----------------------------------------------------
+
+def test_saved_config_has_no_machine_specific_paths(tmp_path):
+    """Regression: init-config used to serialise the model's absolute path,
+    so config.json only worked in the directory it was written in -- moving or
+    cloning the project left it pointing at a file that was no longer there."""
+    out = tmp_path / "config.json"
+    Config().save(out)
+    assert "/Users/" not in out.read_text()
+    assert json.loads(out.read_text())["model_path"] == ""
+
+
+def test_a_blank_model_path_resolves_to_the_bundled_model():
+    cfg = Config()
+    assert cfg.model_path == ""
+    assert cfg.model_file.name == "hand_landmarker.task"
+    assert cfg.model_file.is_absolute()
+
+
+def test_an_explicit_model_path_is_still_honoured(tmp_path):
+    elsewhere = tmp_path / "custom.task"
+    cfg = Config()
+    cfg.model_path = str(elsewhere)
+    assert cfg.model_file == elsewhere
+
+
+def test_config_survives_a_save_load_round_trip(tmp_path):
+    out = tmp_path / "config.json"
+    cfg = Config()
+    cfg.gesture.toggle_pose = "OPEN_PALM"
+    cfg.save(out)
+    assert Config.load(out).gesture.toggle_pose == "OPEN_PALM"

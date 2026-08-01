@@ -57,7 +57,7 @@ def open_camera(cfg: Config) -> cv2.VideoCapture:
 def build_landmarker(cfg: Config) -> vision.HandLandmarker:
     g = cfg.gesture
     options = vision.HandLandmarkerOptions(
-        base_options=BaseOptions(model_asset_path=cfg.model_path),
+        base_options=BaseOptions(model_asset_path=str(cfg.model_file)),
         running_mode=vision.RunningMode.VIDEO,
         num_hands=max(1, min(2, cfg.hands.count)),
         min_hand_detection_confidence=g.min_detection_confidence,
