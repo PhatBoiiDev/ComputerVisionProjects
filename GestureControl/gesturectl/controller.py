@@ -13,8 +13,8 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .config import Config
-from .filters import Point2DFilter
-from .gestures import INDEX_MCP, INDEX_TIP, Gesture, Hand
+from .cursor import CursorPump
+from .gestures import Gesture, Hand
 from .macos_input import KeyboardController, MouseController, WindowController
 
 # Poses that mean "this hand wants to do something".
@@ -49,6 +49,7 @@ class Status:
     cursor: tuple[float, float] = (0.0, 0.0)
     events: list[str] = field(default_factory=list)
     toggle_pose: Gesture = Gesture.FIST
+    acting: str | None = None
 
     @property
     def hand_present(self) -> bool:
@@ -76,15 +77,15 @@ class HandActions:
     """Everything one hand can do on its own."""
 
     def __init__(self, cfg: Config, mouse: MouseController, keyboard: KeyboardController,
-                 mapper: ScreenMapper, log) -> None:
+                 mapper: ScreenMapper, log, pump: CursorPump) -> None:
         self.cfg = cfg
         self.mouse = mouse
         self.keyboard = keyboard
         self.map = mapper
         self.log = log
-
-        s = cfg.smoothing
-        self._filter = Point2DFilter(s.min_cutoff, s.beta, s.d_cutoff)
+        # Cursor motion is applied by the pump on its own clock; this class
+        # decides where the cursor should be, not when it gets there.
+        self.pump = pump
         self._prev_gesture = Gesture.NONE
 
         self._pinch_active = False
@@ -104,7 +105,7 @@ class HandActions:
 
     def activate(self) -> None:
         """Called when this hand takes over; forget stale motion history."""
-        self._filter.reset()
+        self.pump.recentre()
         self._scroll_prev = None
 
     def release(self, now: float, fire_pending: bool = True) -> None:
@@ -121,6 +122,7 @@ class HandActions:
         self._scroll_prev = None
         self._pinky_since = None
         self._prev_gesture = Gesture.NONE
+        self.pump.deactivate()
 
     def _cooling_down(self, now: float) -> bool:
         return (now - self._last_action_t) < self.cfg.click.cooldown
@@ -128,13 +130,17 @@ class HandActions:
     # -- main update --------------------------------------------------
 
     def update(self, hand: Hand, gesture: Gesture, now: float) -> tuple[float, float]:
-        anchor_idx = INDEX_TIP if self.cfg.cursor_anchor == "index_tip" else INDEX_MCP
-        anchor = hand.point(anchor_idx)
+        anchor = hand.anchor(self.cfg.cursor_anchor)
         sx, sy = self.map(float(anchor[0]), float(anchor[1]))
-        fx, fy = self._filter(sx, sy, now)
 
-        if gesture in (Gesture.POINT, Gesture.PINCH):
-            self.mouse.move_to(fx, fy)
+        # An index finger alone steers, and a pinch keeps steering so a drag can
+        # go somewhere. Every other pose leaves the cursor parked where it is.
+        self.pump.set_target(sx, sy, gesture in (Gesture.POINT, Gesture.PINCH))
+        if not self.cfg.cursor.threaded:
+            self.pump.step(now)
+        # Falls back to the unsmoothed point only on the very first frame,
+        # before the pump has produced anything.
+        fx, fy = self.pump.value or (sx, sy)
 
         self._handle_pinch(gesture, now, fx, fy)
         self._handle_scroll(gesture, fx, fy)
@@ -290,11 +296,15 @@ class GestureController:
 
         self.map = ScreenMapper(config, mouse.width, mouse.height)
         self.events: list[str] = []
+        # One pump shared by both hands: only ever one cursor, so only ever one
+        # filter, and handing over between hands is an explicit recentre.
+        self.pump = CursorPump(config, mouse)
         self.actions = {
-            label: HandActions(config, mouse, self.keyboard, self.map, self._log)
+            label: HandActions(config, mouse, self.keyboard, self.map, self._log, self.pump)
             for label in ("Left", "Right")
         }
         self._acting: str | None = None
+        self._acting_missing_since: float | None = None
 
         try:
             self.toggle_pose = Gesture(config.gesture.toggle_pose)
@@ -316,6 +326,7 @@ class GestureController:
             del self.events[:-6]
 
     def recentre(self) -> None:
+        self.pump.recentre()
         for act in self.actions.values():
             act.activate()
 
@@ -328,13 +339,41 @@ class GestureController:
     def _release_all(self, now: float, fire_pending: bool = True) -> None:
         for act in self.actions.values():
             act.release(now, fire_pending=fire_pending)
+        self.pump.deactivate()
         self._acting = None
+        self._acting_missing_since = None
         self._end_resize()
 
     # -- main update ---------------------------------------------------
 
+    def _check_acting_hand(self, by_label: dict[str, TrackedHand], now: float) -> None:
+        """Disarm once the hand that was steering has really left the frame.
+
+        Detection drops the occasional frame, and disarming on a single miss
+        would make control feel like it keeps falling out from under you, so a
+        short grace period has to elapse first. Anything longer than that is a
+        hand that has genuinely gone, and leaving control armed with nothing
+        driving it is how a cursor ends up stranded mid-screen.
+        """
+        if not self.armed or self._acting is None:
+            self._acting_missing_since = None
+            return
+        if self._acting in by_label:
+            self._acting_missing_since = None
+            return
+        if self._acting_missing_since is None:
+            self._acting_missing_since = now
+            # Never hold a button for a hand that is no longer there, even
+            # though its claim on the cursor survives the grace window.
+            self.actions[self._acting].release(now, fire_pending=False)
+            return
+        if now - self._acting_missing_since >= self.cfg.cursor.hand_timeout:
+            self._log(f"{self._acting} hand left the frame")
+            self.toggle_armed()
+
     def hands_lost(self, now: float) -> Status:
         """Fail safe: never leave a button held when tracking drops out."""
+        self._check_acting_hand({}, now)
         # A pinky raised as the hand leaves the frame is not a flick, so pending
         # exit state is dropped rather than fired.
         self._release_all(now, fire_pending=self.armed)
@@ -347,6 +386,7 @@ class GestureController:
         by_label = {t.label: t for t in tracked}
         gestures = [t.gesture for t in tracked]
         self._handle_arm_toggle(gestures, now)
+        self._check_acting_hand(by_label, now)
 
         resizing = False
         if self.armed and self.cfg.resize.enabled and len(tracked) == 2:
@@ -377,9 +417,18 @@ class GestureController:
             cursor=self.mouse.position,
             events=list(self.events),
             toggle_pose=self.toggle_pose,
+            acting=self._acting,
         )
 
     def _dispatch_single_hand(self, by_label: dict[str, TrackedHand], now: float) -> None:
+        if self._acting_missing_since is not None:
+            # The hand that had the cursor is gone but still inside its grace
+            # window. Control belongs to the hand that took it: another hand in
+            # frame does not inherit it, and if the original does not come back
+            # control ends rather than quietly changing owner.
+            self.pump.deactivate()
+            return
+
         acting = self._choose_acting(by_label)
 
         if self._acting is not None and self._acting != acting:
@@ -397,16 +446,25 @@ class GestureController:
         self.actions[acting].update(t.hand, t.gesture, now)
 
     def _choose_acting(self, by_label: dict[str, TrackedHand]) -> str | None:
-        """Prefer the primary hand, but let the other one work on its own."""
+        """Pick the hand the cursor rides on, and then leave it alone.
+
+        When control is up for grabs the primary hand wins, so raising both
+        hands from nothing puts the cursor on the right one. But a hand that
+        already has the cursor keeps it for as long as it is on screen: the
+        other hand entering the frame must not yank the cursor away mid-motion,
+        which is exactly what would happen if the primary won every frame.
+        """
         if not by_label:
             return None
+        if self._acting in by_label:
+            return self._acting
         primary = self.cfg.hands.primary
         order = [primary] + [k for k in by_label if k != primary]
         for label in order:
             t = by_label.get(label)
             if t is not None and t.gesture in ACTIONABLE:
                 return label
-        return order[0] if order[0] in by_label else next(iter(by_label))
+        return next((label for label in order if label in by_label), None)
 
     # -- arm toggle ----------------------------------------------------
 

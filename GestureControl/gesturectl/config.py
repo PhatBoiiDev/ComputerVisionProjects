@@ -120,6 +120,28 @@ class ExitConfig:
 
 
 @dataclass
+class CursorConfig:
+    """How often the cursor is updated, independent of the camera.
+
+    The camera is the real latency floor: at 30 fps a new hand position only
+    exists every 33 ms. Polling faster than that cannot invent new information,
+    but it does two measurable things -- it picks up each new sample sooner
+    (bounded by 1/poll_hz) and it lets the smoothing filter run in finer steps,
+    so motion arrives as a ramp rather than a 33 ms jump.
+
+    500 Hz was measured as the balance point. Below it both lag and step size
+    climb sharply; above it lag is unchanged within noise while CPU keeps
+    rising. See README for the full table.
+    """
+    poll_hz: float = 500.0
+    threaded: bool = True
+    # How long the acting hand may vanish before control disarms. Detection
+    # drops a frame now and then, and disarming on a single miss would make
+    # control feel like it keeps falling out from under you.
+    hand_timeout: float = 0.45
+
+
+@dataclass
 class Config:
     camera: CameraConfig = field(default_factory=CameraConfig)
     region: RegionConfig = field(default_factory=RegionConfig)
@@ -131,10 +153,13 @@ class Config:
     hands: HandsConfig = field(default_factory=HandsConfig)
     resize: ResizeConfig = field(default_factory=ResizeConfig)
     exit_gesture: ExitConfig = field(default_factory=ExitConfig)
+    cursor: CursorConfig = field(default_factory=CursorConfig)
 
-    # "index_mcp" is steadier and does not shift when you pinch;
-    # "index_tip" feels more like pointing but jitters more.
-    cursor_anchor: str = "index_mcp"
+    # "index_mid" is the midpoint of the index finger: it points where the
+    # finger points, but moves only half as far as the tip when you pinch,
+    # so a click does not drag the cursor off target. "index_tip" and
+    # "index_mcp" track the fingertip and the knuckle respectively.
+    cursor_anchor: str = "index_mid"
 
     # Blank means the copy setup.sh downloads into models/. Set this only to
     # point somewhere else -- see the model_file property below.

@@ -37,6 +37,69 @@ it is now completely inert, so those misreads do nothing at all.
 
 If you prefer a different switch, `gesture.toggle_pose` takes any gesture name.
 
+## The cursor
+
+Hold up the index finger alone and the cursor follows it; pinch to click, and
+keep pinching to drag. Those two poses are the only ones that steer — scrolling
+and right-clicking move your hand a long way, and the cursor stays parked
+through both.
+
+**The cursor rides the middle of your index finger**, halfway between the
+knuckle and the tip, rather than on the tip itself. The tip aims well but swings
+a long way when the finger folds in to pinch, which drags the cursor off target
+at the exact moment you are trying to click. The midpoint aims the same way and
+travels half as far. `cursor_anchor` takes `index_tip` or `index_mcp` if you
+prefer the fingertip or the knuckle.
+
+### Which hand has it
+
+- Both hands up from the start: the **right** hand gets the cursor.
+- One hand up: **that** hand gets it, left or right.
+- A hand that already has the cursor **keeps** it. The other hand entering the
+  frame does not take it — otherwise the cursor would jump mid-motion every time
+  your other hand drifted into view.
+- When the hand holding the cursor **leaves the frame, control disarms.** Control
+  belongs to the hand that took it; if that hand goes, control ends rather than
+  quietly changing owner. The other hand does not inherit it.
+
+Detection drops the occasional frame, so a hand has to be missing for
+`cursor.hand_timeout` (0.45 s) before that counts as leaving. Any button still
+held is released the instant the hand vanishes, without waiting for the timeout.
+
+### Update rate
+
+The cursor runs on its own clock rather than the camera's, so it is not limited
+to one update per frame. Measured on this machine against a 30 fps camera:
+
+| Poll rate | CPU | Motion step (p95) | Added lag |
+|---|---|---|---|
+| 125 Hz | 1.7% | 40.4 px | 12.6 ms |
+| 250 Hz | 2.7% | 30.1 px | 7.2 ms |
+| 400 Hz | 3.5% | 20.4 px | 6.9 ms |
+| **500 Hz** | **3.9%** | **15.0 px** | **4.7 ms** |
+| 650 Hz | 4.3% | 12.0 px | 5.6 ms |
+| 800 Hz | 5.3% | 9.9 px | 4.1 ms |
+| 1000 Hz | 6.5% | 8.2 px | 4.5 ms |
+
+**500 Hz is the default.** Lag bottoms out there — 650, 800 and 1000 Hz are all
+within noise of it, while CPU keeps climbing — and 15 px between updates is
+already far finer than anything you can aim at.
+
+Worth being clear about what this does and does not buy. Polling faster cannot
+invent hand positions the camera never captured. It does two real things: a new
+sample is picked up within 1/rate instead of waiting for the next trip around
+the capture loop, and the smoothing filter is evaluated on a fine clock, so a
+hand that moved a frame's worth of distance arrives as a ramp rather than a
+single hop.
+
+**The camera is the real latency floor.** At 30 fps a new hand position only
+exists every 33 ms, which is several times larger than any number in that table.
+If you want the cursor to feel meaningfully closer to your hand, raising
+`camera.fps` is worth far more than any poll rate — going from 30 to 60 fps
+halves the dominant term, where 125 Hz to 1000 Hz moves an 8 ms term by 8 ms.
+Whether your webcam will actually deliver 60 fps at 640x480 is the thing to test.
+
+
 ### The exit gesture
 
 Raise the pinky alone and nothing happens yet; the window closes on the way
@@ -142,7 +205,10 @@ gesture is not being recognised you can see exactly why before changing anything
 | `hands.primary` | Which hand wins when both are making an actionable gesture. |
 | `resize.deadzone` | How much the finger gap must change before the window resizes. |
 | `exit_gesture.arm_hold` | How long the pinky must be up before dropping it counts. |
-| `cursor_anchor` | `index_mcp` (default) tracks your knuckle: steadier, and it does not shift when you pinch. `index_tip` tracks your fingertip: feels more like pointing, but jitters more. |
+| `cursor.poll_hz` | How often the cursor is updated, in Hz. See the table above. |
+| `cursor.threaded` | Set false to update the cursor once per camera frame instead, on the capture thread. |
+| `cursor.hand_timeout` | How long the acting hand may be missing before control disarms. |
+| `cursor_anchor` | `index_mid` (default) is the middle of your index finger. `index_tip` tracks the fingertip: aims well, but swings when you pinch. `index_mcp` tracks the knuckle: steadiest, but aims least like pointing. |
 
 `extend_below` and `curl_above` are deliberately far apart. A finger sitting
 right at a single threshold flips state from frame to frame, which is what makes
@@ -188,8 +254,10 @@ A few decisions worth knowing about:
   them without a deliberate move.
 - **The One Euro filter** smooths heavily when your hand is still but backs off
   as it speeds up, so the cursor is steady at rest without feeling laggy.
-- **The cursor tracks your index knuckle, not your fingertip.** A fingertip moves
-  as you pinch, which drags the cursor off-target at the exact moment you click.
+- **The cursor is applied on its own clock**, not the camera's, so smoothing is
+  evaluated finely and each new sample is picked up within 1/`poll_hz`.
+- **The cursor tracks the middle of your index finger.** The fingertip moves as
+  you pinch, which drags the cursor off-target at the exact moment you click.
 - **Only one hand acts at a time.** Both are tracked, but a single "acting" hand
   owns the cursor, so two raised hands can never fire two clicks at once.
 - **Two-handed gestures are checked first** and suppress single-hand actions
@@ -204,9 +272,10 @@ A few decisions worth knowing about:
 ./.venv/bin/python -m pytest tests/ -q
 ```
 
-101 tests covering gesture classification, the click/drag/scroll state machine,
-the exit and resize gestures, hand assignment, coordinate mapping, config
-round-tripping and the capture loop. Hand poses are built by forward kinematics from joint angles, so a
+126 tests covering gesture classification, the click/drag/scroll state machine,
+the exit and resize gestures, cursor anchoring, which hand holds the cursor,
+the update pump, hand assignment, coordinate mapping, config round-tripping and
+the capture loop. Hand poses are built by forward kinematics from joint angles, so a
 test can describe a pose the way a hand actually moves — including tilted,
 mirrored, rescaled and camera-angled variants — and the suite runs without a
 camera.

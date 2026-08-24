@@ -1,11 +1,15 @@
 import sys
 from pathlib import Path
 
+import numpy as np
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from gesturectl.config import Config                                    # noqa: E402
 from gesturectl.controller import GestureController, TrackedHand        # noqa: E402
-from gesturectl.gestures import FingerTracker, Gesture, build_hand      # noqa: E402
+from gesturectl.gestures import (                                       # noqa: E402
+    INDEX_MCP, INDEX_TIP, FingerTracker, Gesture, build_hand,
+)
 from gesturectl.macos_input import (                                    # noqa: E402
     KeyboardController, MouseController, WindowController,
 )
@@ -22,6 +26,9 @@ class Driver:
         for key, value in overrides.items():
             section, _, field = key.partition(".")
             setattr(getattr(self.cfg, section), field, value)
+        # Drive the pump synchronously so cursor motion is deterministic;
+        # the background thread has its own tests.
+        self.cfg.cursor.threaded = overrides.get("cursor.threaded", False)
         self.mouse = MouseController(dry_run=True)
         self.keyboard = KeyboardController(dry_run=True)
         self.windows = WindowController(dry_run=True)
@@ -551,3 +558,174 @@ def test_positions_outside_the_region_clamp_to_the_edge():
     d = Driver()
     assert d.ctl.map(-0.5, -0.5) == (0.0, 0.0)
     assert d.ctl.map(1.5, 1.5) == (d.mouse.width - 1, d.mouse.height - 1)
+
+
+# -- cursor anchor ---------------------------------------------------------
+
+def _hand_of(pose, label="Right"):
+    return build_hand(pose.image, ASPECT, pose.world, label)
+
+
+def test_the_cursor_rides_the_middle_of_the_index_finger():
+    h = _hand_of(syn.point())
+    mid, mcp, tip = h.anchor("index_mid"), h.raw[INDEX_MCP], h.raw[INDEX_TIP]
+    assert np.allclose(mid, (mcp + tip) / 2.0)
+    for lo, hi, m in zip(mcp, tip, mid):
+        assert min(lo, hi) <= m <= max(lo, hi)
+
+
+def test_the_midpoint_travels_less_than_the_fingertip_when_the_finger_bends():
+    """Why the cursor sits mid-finger rather than on the tip: bending the index
+    swings the tip a long way while the knuckle stays put, so the midpoint moves
+    half as far and the cursor does not lurch as the finger folds."""
+    straight = _hand_of(syn.point(syn.STRAIGHT))
+    bent = _hand_of(syn.point((0.0, 45.0, 30.0)))
+
+    def shift(name):
+        return float(np.linalg.norm(bent.anchor(name) - straight.anchor(name)))
+
+    assert shift("index_tip") > 0.0, "precondition: bending moved the tip"
+    assert shift("index_mid") < shift("index_tip")
+
+
+def test_an_unknown_anchor_name_falls_back_to_the_midpoint():
+    h = _hand_of(syn.point())
+    assert np.allclose(h.anchor("nonsense"), h.anchor("index_mid"))
+
+
+def test_the_anchor_is_configurable():
+    h = _hand_of(syn.point())
+    assert np.allclose(h.anchor("index_tip"), h.raw[INDEX_TIP])
+    assert np.allclose(h.anchor("index_mcp"), h.raw[INDEX_MCP])
+
+
+# -- cursor movement -------------------------------------------------------
+
+def test_pointing_moves_the_cursor():
+    d = Driver()
+    start = d.mouse.position
+    for i in range(10):
+        d.one(syn.translate(syn.point(), dx=0.015 * i), Gesture.POINT)
+    assert d.mouse.position != start
+
+
+def test_a_pinch_keeps_steering_so_a_drag_can_go_somewhere():
+    d = Driver()
+    d.idle(0.3, gesture=Gesture.POINT)
+    before = d.mouse.position
+    for i in range(10):
+        d.one(syn.translate(syn.pinch(), dx=0.015 * i), Gesture.PINCH)
+    assert d.mouse.position != before
+
+
+def test_other_poses_leave_the_cursor_where_it_is():
+    """Scrolling and right-clicking move the hand a long way; the cursor must
+    stay put or every scroll would fling it across the screen."""
+    d = Driver()
+    d.idle(0.3, gesture=Gesture.POINT)
+    parked = d.mouse.position
+    for i in range(10):
+        d.one(syn.translate(syn.three(), dx=0.03 * i), Gesture.THREE)
+    assert d.mouse.position == parked
+
+
+def test_the_cursor_does_not_move_while_disarmed():
+    d = Driver(armed=False)
+    start = d.mouse.position
+    for i in range(10):
+        d.one(syn.translate(syn.point(), dx=0.02 * i), Gesture.POINT)
+    assert d.mouse.position == start
+
+
+# -- which hand has the cursor --------------------------------------------
+
+def test_the_right_hand_takes_the_cursor_when_both_arrive_together():
+    d = Driver()
+    st = d.feed([("Left", syn.peace(), Gesture.SCROLL),
+                 ("Right", syn.point(), Gesture.POINT)])
+    assert st.acting == "Right"
+
+
+def test_the_right_hand_alone_gets_the_cursor():
+    assert Driver().one(syn.point(), Gesture.POINT, label="Right").acting == "Right"
+
+
+def test_the_left_hand_alone_gets_the_cursor():
+    assert Driver().one(syn.point(), Gesture.POINT, label="Left").acting == "Left"
+
+
+def test_a_second_hand_entering_does_not_steal_the_cursor():
+    """The rule that matters in use: the cursor must not jump hands mid-motion
+    just because the other hand wandered into frame."""
+    d = Driver()
+    assert d.one(syn.point(), Gesture.POINT, label="Left").acting == "Left"
+    st = None
+    for _ in range(12):
+        st = d.feed([("Left", syn.point(), Gesture.POINT),
+                     ("Right", syn.point(), Gesture.SCROLL)])
+    assert st.acting == "Left", "the right hand stole the cursor"
+
+
+def test_the_primary_hand_only_wins_when_the_cursor_is_unclaimed():
+    d = Driver()
+    d.one(syn.point(), Gesture.POINT, label="Left")
+    d.ctl.toggle_armed()                       # drop the claim
+    d.ctl.toggle_armed()
+    st = d.feed([("Left", syn.point(), Gesture.POINT),
+                 ("Right", syn.point(), Gesture.SCROLL)])
+    assert st.acting == "Right"
+
+
+# -- losing the acting hand ------------------------------------------------
+
+def test_control_disarms_when_the_acting_hand_leaves():
+    d = Driver()
+    d.idle(0.3, gesture=Gesture.POINT)
+    assert d.ctl.armed
+    for _ in range(int(0.9 / (1 / 30))):
+        d.feed([])
+    assert not d.ctl.armed
+
+
+def test_a_dropped_frame_does_not_disarm():
+    """Detection misses the odd frame; control that fell out on every blink
+    would be unusable."""
+    d = Driver()
+    d.idle(0.3, gesture=Gesture.POINT)
+    for _ in range(3):
+        d.feed([])
+    assert d.ctl.armed
+    d.one(syn.point(), Gesture.POINT)
+    assert d.ctl.armed
+
+
+def test_the_other_hand_does_not_inherit_control_when_the_first_leaves():
+    """Control belongs to the hand that took it. If that hand goes, control ends
+    rather than quietly changing owner -- even with the other hand right there
+    and pointing."""
+    d = Driver()
+    d.one(syn.point(), Gesture.POINT, label="Left")
+    parked = d.mouse.position
+    for _ in range(int(0.9 / (1 / 30))):
+        d.feed([("Right", syn.point(), Gesture.POINT)])
+    assert not d.ctl.armed
+    assert "Left hand left the frame" in d.ctl.events
+    assert d.mouse.position == parked, "the right hand drove the cursor anyway"
+
+
+def test_the_cursor_freezes_while_the_acting_hand_is_missing():
+    d = Driver()
+    d.idle(0.3, gesture=Gesture.POINT)
+    parked = d.mouse.position
+    for _ in range(3):
+        d.feed([])
+    assert d.mouse.position == parked
+
+
+def test_a_held_button_is_released_the_moment_the_hand_vanishes():
+    d = Driver()
+    for _ in range(20):
+        d.one(syn.pinch(), Gesture.PINCH)
+    assert "left down" in d.log
+    d.feed([])
+    assert d.log[-1] == "left up"
