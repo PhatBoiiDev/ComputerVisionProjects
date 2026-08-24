@@ -21,6 +21,10 @@ from .macos_input import KeyboardController, MouseController, WindowController
 ACTIONABLE = (Gesture.POINT, Gesture.PINCH, Gesture.SCROLL,
               Gesture.THREE, Gesture.PINKY_UP)
 
+# Poses that steer the cursor. Two hands up with neither of these showing is
+# ambiguous, and nothing fires until one of them appears.
+CURSOR_POSES = (Gesture.POINT, Gesture.PINCH)
+
 
 @dataclass
 class TrackedHand:
@@ -399,6 +403,14 @@ class GestureController:
                 if label in by_label:
                     act.release(now, fire_pending=False)
             self._acting = None
+        elif len(tracked) == 2 and not any(g in CURSOR_POSES for g in gestures):
+            # Both hands up and neither is steering. Two index fingers is the
+            # resize pose and was handled above; any other pair is ambiguous
+            # about which hand means what, so nothing fires until one hand
+            # points or pinches. The acting hand keeps its claim throughout, so
+            # this pauses control rather than handing it over.
+            self._end_resize()
+            self._idle_hands(by_label, now)
         else:
             self._end_resize()
             self._dispatch_single_hand(by_label, now)
@@ -419,6 +431,18 @@ class GestureController:
             toggle_pose=self.toggle_pose,
             acting=self._acting,
         )
+
+    def _idle_hands(self, by_label: dict[str, TrackedHand], now: float) -> None:
+        """Hold everything still without giving up the cursor's owner.
+
+        A tap already completed before the hands went ambiguous still counts --
+        the rule is that nothing new starts, not that finished input is thrown
+        away. Relaxing both hands after a click should not swallow the click.
+        """
+        for label, act in self.actions.items():
+            if label in by_label:
+                act.release(now, fire_pending=True)
+        self.pump.deactivate()
 
     def _dispatch_single_hand(self, by_label: dict[str, TrackedHand], now: float) -> None:
         if self._acting_missing_since is not None:

@@ -273,28 +273,63 @@ def test_two_raised_hands_do_not_double_click():
     """Only the acting hand may fire, or every action would happen twice."""
     d = Driver()
     d.feed([("Left", syn.pinch(), Gesture.PINCH), ("Right", syn.pinch(), Gesture.PINCH)])
-    d.feed([("Left", syn.fist(), Gesture.FIST), ("Right", syn.fist(), Gesture.FIST)], dt=0.15)
+    # Right keeps steering so the pinch is seen to end; left drops out of play.
+    d.feed([("Left", syn.fist(), Gesture.FIST), ("Right", syn.point(), Gesture.POINT)], dt=0.15)
     d.idle(0.7)
     assert d.log == ["click"]
 
 
 def test_the_primary_hand_wins_when_both_are_active():
+    """Both hands steering: the primary one gets it, and only it."""
     d = Driver()
-    status = d.feed([("Left", syn.peace(), Gesture.SCROLL),
-                     ("Right", syn.peace(), Gesture.SCROLL)])
+    status = d.feed([("Left", syn.pinch(), Gesture.PINCH),
+                     ("Right", syn.pinch(), Gesture.PINCH)])
     acting = [h.label for h in status.hands if h.acting]
     assert acting == [d.cfg.hands.primary]
 
 
-def test_only_one_hand_scrolls_when_both_are_raised():
+def test_two_raised_hands_that_are_not_steering_do_nothing():
+    """Two hands up with neither pointing or pinching is ambiguous about which
+    hand means what, so nothing fires until one of them steers."""
     d = Driver()
     for i in range(14):
         moved = syn.translate(syn.peace(), dy=-0.02 * i)
         d.feed([("Left", moved, Gesture.SCROLL), ("Right", moved, Gesture.SCROLL)])
-    single = Driver()
+    assert _scroll_deltas(d.log) == []
+
+
+def test_one_hand_scrolling_alone_still_works():
+    """The same motion with only one hand in frame is unambiguous."""
+    d = Driver()
     for i in range(14):
-        single.one(syn.translate(syn.peace(), dy=-0.02 * i), Gesture.SCROLL)
-    assert sum(_scroll_deltas(d.log)) == sum(_scroll_deltas(single.log))
+        d.one(syn.translate(syn.peace(), dy=-0.02 * i), Gesture.SCROLL)
+    assert _scroll_deltas(d.log)
+
+
+def test_a_steering_hand_still_acts_with_the_other_hand_in_frame():
+    """The rule only suppresses when *neither* hand is steering."""
+    d = Driver()
+    start = d.mouse.position
+    for i in range(12):
+        d.feed([("Left", syn.peace(), Gesture.SCROLL),
+                ("Right", syn.translate(syn.point(), dx=0.015 * i), Gesture.POINT)])
+    assert d.mouse.position != start
+    assert _scroll_deltas(d.log) == [], "the idle hand scrolled anyway"
+
+
+def test_a_completed_click_survives_both_hands_going_idle():
+    """Nothing new starts, but input that already finished is not thrown away.
+
+    A tap is held back briefly in case it turns into a double click, so it is
+    still pending at the moment both hands relax. It must not be discarded.
+    """
+    d = Driver()
+    d.one(syn.pinch(), Gesture.PINCH)                 # pinch down
+    d.one(syn.point(), Gesture.POINT)                 # and up: that is the tap
+    d.feed([("Left", syn.fist(), Gesture.FIST),
+            ("Right", syn.fist(), Gesture.FIST)], dt=0.05)
+    d.idle(0.7)
+    assert d.log == ["click"]
 
 
 def test_a_resting_primary_hand_yields_to_the_other():

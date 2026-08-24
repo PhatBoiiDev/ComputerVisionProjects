@@ -66,6 +66,25 @@ Detection drops the occasional frame, so a hand has to be missing for
 `cursor.hand_timeout` (0.45 s) before that counts as leaving. Any button still
 held is released the instant the hand vanishes, without waiting for the timeout.
 
+### Two hands up
+
+With both hands in frame, only two things can happen:
+
+- **Both index fingers out** is the window resize.
+- **One hand pointing or pinching** drives the cursor as usual; the other hand
+  is ignored while it does.
+
+Anything else does **nothing at all**. Two hands up with neither one steering is
+ambiguous about which hand means what, so no action fires until one of them
+points or pinches. The hand holding the cursor keeps its claim throughout, so
+this pauses control rather than handing it over, and a tap that already
+completed is still delivered rather than swallowed.
+
+The practical consequence worth knowing: **scrolling and right-clicking need
+your other hand out of frame.** Both are one-handed gestures, and neither steers
+the cursor, so raising a second hand while scrolling stops the scroll instead of
+letting the other hand take over.
+
 ### Update rate
 
 The cursor runs on its own clock rather than the camera's, so it is not limited
@@ -272,7 +291,7 @@ A few decisions worth knowing about:
 ./.venv/bin/python -m pytest tests/ -q
 ```
 
-126 tests covering gesture classification, the click/drag/scroll state machine,
+129 tests covering gesture classification, the click/drag/scroll state machine,
 the exit and resize gestures, cursor anchoring, which hand holds the cursor,
 the update pump, hand assignment, coordinate mapping, config round-tripping and
 the capture loop. Hand poses are built by forward kinematics from joint angles, so a
