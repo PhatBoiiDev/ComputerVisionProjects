@@ -61,7 +61,12 @@
     "cooldown": 1.5,
     "shortcut": "cmd+w"
   },
-  "cursor_anchor": "index_mcp",
+  "cursor": {
+    "poll_hz": 500.0,
+    "threaded": true,
+    "hand_timeout": 0.45
+  },
+  "cursor_anchor": "index_mid",
   "model_path": "",
   "start_armed": false
 }

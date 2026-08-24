@@ -111,9 +111,13 @@ def run(cfg: Config, show_preview: bool = True, dry_run: bool = False,
         windows=WindowController(dry_run=dry_run),
     )
     states = {label: HandState(cfg) for label in LABELS}
+    controller.pump.start()
 
+    rate = f"{cfg.cursor.poll_hz:.0f} Hz" if cfg.cursor.threaded else "camera rate"
     print(f"Screen: {mouse.width}x{mouse.height}   preview: {show_preview}   dry run: {dry_run}")
-    print("Hold an OPEN PALM for ~1s to arm or disarm control.")
+    print(f"Cursor: {rate}   camera: {cfg.camera.fps:.0f} fps")
+    print(f"Hold a {cfg.gesture.toggle_pose} for ~{cfg.gesture.arm_toggle_hold:.0f}s "
+          "to arm or disarm control.")
     if show_preview:
         print("In the preview window: q quits, space arms/disarms, r recentres.")
     else:
@@ -196,6 +200,9 @@ def run(cfg: Config, show_preview: bool = True, dry_run: bool = False,
     except KeyboardInterrupt:
         print("\ninterrupted")
     finally:
+        # Stop the pump before releasing buttons, so nothing is still posting
+        # movement while the mouse is being put back into a clean state.
+        controller.pump.stop()
         mouse.release_all()
         cap.release()
         landmarker.close()

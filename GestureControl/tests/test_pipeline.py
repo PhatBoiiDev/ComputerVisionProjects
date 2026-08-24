@@ -8,6 +8,7 @@ loop always shuts down cleanly.
 
 import json
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,9 +20,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from gesturectl import app, hud                                         # noqa: E402
 from gesturectl.config import Config                                    # noqa: E402
+from gesturectl.cursor import CursorPump                                # noqa: E402
 from gesturectl.controller import HandStatus, Status                    # noqa: E402
 from gesturectl.gestures import FingerTracker, Gesture, build_hand      # noqa: E402
-from gesturectl.macos_input import parse_shortcut                       # noqa: E402
+from gesturectl.macos_input import MouseController, parse_shortcut      # noqa: E402
 from tests import synthetic as syn                                      # noqa: E402
 
 MODEL = Config().model_file
@@ -270,3 +272,81 @@ def test_config_survives_a_save_load_round_trip(tmp_path):
     cfg.gesture.toggle_pose = "OPEN_PALM"
     cfg.save(out)
     assert Config.load(out).gesture.toggle_pose == "OPEN_PALM"
+
+
+# -- cursor pump -----------------------------------------------------------
+
+def _pump(**cursor):
+    cfg = Config()
+    for k, v in cursor.items():
+        setattr(cfg.cursor, k, v)
+    mouse = MouseController(dry_run=True)
+    return CursorPump(cfg, mouse), mouse
+
+
+def test_the_pump_does_nothing_without_a_target():
+    pump, _ = _pump(threaded=False)
+    assert pump.step(0.0) is None
+
+
+def test_the_pump_moves_the_cursor_toward_an_active_target():
+    pump, mouse = _pump(threaded=False)
+    start = mouse.position
+    t = 0.0
+    for _ in range(40):
+        t += 1 / 500
+        pump.set_target(900.0, 500.0, active=True)
+        pump.step(t)
+    assert mouse.position != start
+    assert pump.updates == 40
+
+
+def test_an_inactive_target_is_tracked_but_not_applied():
+    """Scrolling reads the smoothed position while the cursor stays parked, so
+    the filter has to keep running even when it is not steering."""
+    pump, mouse = _pump(threaded=False)
+    parked = mouse.position
+    t = 0.0
+    for _ in range(20):
+        t += 1 / 500
+        pump.set_target(900.0, 500.0, active=False)
+        pump.step(t)
+    assert mouse.position == parked
+    assert pump.value is not None
+    assert pump.updates == 0
+
+
+def test_recentring_forgets_the_target():
+    pump, _ = _pump(threaded=False)
+    pump.set_target(400.0, 400.0, active=True)
+    pump.step(0.002)
+    pump.recentre()
+    assert pump.value is None
+    assert pump.step(0.004) is None
+
+
+def test_the_threaded_pump_runs_near_its_configured_rate():
+    pump, mouse = _pump(threaded=True, poll_hz=200.0)
+    pump.set_target(700.0, 400.0, active=True)
+    pump.start()
+    try:
+        assert pump.running
+        time.sleep(0.4)
+    finally:
+        pump.stop()
+    assert not pump.running
+    # Generous bounds: this asserts the loop is paced, not that the machine is
+    # quiet enough to hit the rate exactly.
+    assert 40 < pump.updates < 160, pump.updates
+
+
+def test_stopping_a_pump_that_never_started_is_harmless():
+    pump, _ = _pump(threaded=True)
+    pump.stop()
+    assert not pump.running
+
+
+def test_threading_can_be_turned_off():
+    pump, _ = _pump(threaded=False)
+    pump.start()
+    assert not pump.running

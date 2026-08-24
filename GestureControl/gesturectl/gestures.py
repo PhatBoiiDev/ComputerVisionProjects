@@ -77,6 +77,25 @@ class Hand:
     def index_tip(self) -> np.ndarray:
         return self.pts[INDEX_TIP]
 
+    @property
+    def index_mid(self) -> np.ndarray:
+        """Midway along the index finger, in normalised frame units.
+
+        Halfway between the knuckle and the tip. It aims where the finger aims,
+        the way the tip does, but travels only half as far when the finger
+        folds in to pinch -- so clicking does not tug the cursor off target.
+        """
+        return (self.raw[INDEX_MCP] + self.raw[INDEX_TIP]) / 2.0
+
+    def anchor(self, name: str) -> np.ndarray:
+        """Where the cursor rides on this hand. Unknown names fall back to the
+        midpoint, so a typo in config.json degrades rather than crashes."""
+        if name == "index_tip":
+            return self.raw[INDEX_TIP]
+        if name == "index_mcp":
+            return self.raw[INDEX_MCP]
+        return self.index_mid
+
 
 def _angle_between(v1: np.ndarray, v2: np.ndarray) -> float:
     n1 = float(np.linalg.norm(v1))
